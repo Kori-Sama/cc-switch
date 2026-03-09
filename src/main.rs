@@ -3,6 +3,7 @@ mod settings;
 
 use clap::{Parser, Subcommand};
 use colored::*;
+use std::io::{self, Write};
 use std::process;
 use std::process::Command;
 
@@ -19,6 +20,11 @@ enum Commands {
     List,
     /// Show current active configuration
     Current,
+    /// Add a new API configuration interactively
+    Add {
+        /// Name for the new API configuration
+        name: String,
+    },
 }
 
 struct ParsedArgs {
@@ -37,7 +43,7 @@ fn parse_raw_args() -> Option<ParsedArgs> {
     }
 
     // Check if first arg is a known subcommand
-    if args[0] == "list" || args[0] == "current" || args[0] == "--help" || args[0] == "-h" {
+    if args[0] == "list" || args[0] == "current" || args[0] == "add" || args[0] == "--help" || args[0] == "-h" {
         return None;
     }
 
@@ -106,6 +112,7 @@ fn main() {
     let result = match &cli.command {
         Some(Commands::List) => cmd_list(),
         Some(Commands::Current) => cmd_current(),
+        Some(Commands::Add { name }) => cmd_add(name),
         None => {
             eprintln!("{}", "Usage: ccs <API_NAME> or ccs <COMMAND>".yellow());
             eprintln!("Run 'ccs --help' for more information.");
@@ -200,6 +207,108 @@ fn cmd_current() -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// Add a new API configuration interactively.
+fn cmd_add(name: &str) -> Result<(), String> {
+    println!(
+        "Adding new API configuration: '{}'",
+        name.green().bold()
+    );
+    println!();
+
+    // Check if config already exists
+    if config::config_exists(name)? {
+        print!(
+            "Configuration '{}' already exists. Overwrite? [y/N]: ",
+            name
+        );
+        io::stdout().flush().map_err(|e| format!("IO error: {}", e))?;
+
+        let mut answer = String::new();
+        io::stdin()
+            .read_line(&mut answer)
+            .map_err(|e| format!("Failed to read input: {}", e))?;
+
+        if answer.trim().to_lowercase() != "y" {
+            println!("Aborted.");
+            return Ok(());
+        }
+    }
+
+    // Prompt for BASE_URL (required)
+    let base_url = prompt_required("BASE_URL")?;
+
+    // Prompt for AUTH_TOKEN (required)
+    let auth_token = prompt_required("AUTH_TOKEN")?;
+
+    // Prompt for MODEL (optional)
+    let model = prompt_optional("MODEL")?;
+
+    // Prompt for SMALL_FAST_MODEL (optional)
+    let small_fast_model = prompt_optional("SMALL_FAST_MODEL")?;
+
+    let api = config::ApiConfig {
+        base_url: Some(base_url),
+        auth_token: Some(auth_token),
+        model,
+        small_fast_model,
+    };
+
+    config::save_config(name, api, true)?;
+
+    let path = config::config_path()?;
+    println!();
+    println!(
+        "{} Configuration '{}' saved to {}",
+        "✓".green().bold(),
+        name.green().bold(),
+        path.display().to_string().dimmed()
+    );
+
+    Ok(())
+}
+
+/// Prompt the user for a required field. Keeps asking until a non-empty value is provided.
+fn prompt_required(field: &str) -> Result<String, String> {
+    loop {
+        print!("{}: ", field.bold());
+        io::stdout().flush().map_err(|e| format!("IO error: {}", e))?;
+
+        let mut input = String::new();
+        io::stdin()
+            .read_line(&mut input)
+            .map_err(|e| format!("Failed to read input: {}", e))?;
+
+        let value = input.trim().to_string();
+        if !value.is_empty() {
+            return Ok(value);
+        }
+
+        println!(
+            "{} {} is required, cannot be empty.",
+            "!".yellow().bold(),
+            field
+        );
+    }
+}
+
+/// Prompt the user for an optional field. Returns None if the input is empty.
+fn prompt_optional(field: &str) -> Result<Option<String>, String> {
+    print!("{} (optional, press Enter to skip): ", field.bold());
+    io::stdout().flush().map_err(|e| format!("IO error: {}", e))?;
+
+    let mut input = String::new();
+    io::stdin()
+        .read_line(&mut input)
+        .map_err(|e| format!("Failed to read input: {}", e))?;
+
+    let value = input.trim().to_string();
+    if value.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(value))
+    }
 }
 
 /// Apply config globally (modify ~/.claude/settings.json).
